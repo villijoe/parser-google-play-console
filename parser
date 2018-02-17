@@ -1,0 +1,169 @@
+#!usr/bin/php
+<?php
+
+include_once('phpQuery.php');
+
+$file = $argv[1];
+
+$urls = [];
+$fp = fopen($file, 'r');
+if ($fp){
+    while(!feof($fp)){
+        $urls[] = fgets($fp, 999);
+    }
+} else {
+    echo 'error read file';
+}
+fclose($fp);
+
+$path = 'https://play.google.com/store/apps/details?id=com.rovio.angrybirds';
+$pa = $$path;
+echo $pa;
+
+$datas = [];
+foreach($urls as $url){
+    $url = trim($url);
+    $datas[] = parsing($url);
+}
+//var_dump($datas);
+$datas = array_as_xml($datas, 'parser-google-play');
+
+$tidy_config = [
+    'output-xml' => true,
+    'input-xml' => true,
+    'indent' => true,
+    'clean' => true,
+];
+
+$datas =  tidy_repair_string($datas, $tidy_config);
+
+$fp = fopen('result.xml', 'r+');
+fwrite($fp, $datas);
+fclose($fp);
+
+function parsing($url){
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_HEADER, 0);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept-Language: en-us,en;q=0.5', 'Content-Language: en']);
+    curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6 (.NET CLR 3.5.30729)");
+    curl_setopt($ch, CURLOPT_REFERER, 'https://www.google.com');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    $data = curl_exec($ch);
+    $pq = phpQuery::newDocument($data);
+
+    $datas['company'] = $pq->find('span[itemprop=name]')->text();
+
+    $email = $pq->find('a.dev-link')[0];
+    preg_match('/(\w[\w\d]+@[\w\d]+.[\w]{2,3})/', $email, $matches);
+    $datas['email'] = $matches[0];
+
+    $datas['address'] = $pq->find('.physical-address')->text();
+
+    $dev_link = $pq->find('.dev-link')[0]->attr('href');
+    preg_match('/(http:\/\/www.\w[\w\d]+.[\w]{2,3})/', $dev_link, $matches);
+    $datas['dev_link'] = $matches[0];
+
+    $datas['title'] = $pq->find('.id-app-title')->text();
+
+    $datas['v_product'] = $pq->find('[itemprop=softwareVersion]')->text();
+
+    $datas['img'] = $pq->find('.cover-image[itemprop=image]')->attr('src');
+
+    $screenshots = $pq->find('.screenshot');
+    foreach($screenshots as $key => $screenshot){
+        $datas['screenshot' . $key] = pq($screenshot)->attr('src');
+        //echo 'screenshot #' . $key . pq($screenshot)->attr('src') . "\n";
+    }
+    //echo $screenshots . "\n";
+
+    $datas['video'] = $pq->find('.play-action-container')[0]->attr('data-video-url');
+
+    $datas['desc'] = $pq->find('div[jsname=C4s9Ed')->text();
+
+    $datas['category'] = $pq->find('[itemprop=genre]')->text();
+
+    $datas['v_system'] = $pq->find('[itemprop=operatingSystems]')->text();
+
+    $mat = $pq->find('.meta-info');
+    $type_product = '';
+    foreach($mat as $key => $ma){
+        if ($key == 5) {
+            $datas['type_product'] = pq($ma)->children('.content')->text();
+        }
+    }
+
+    $privacy_policy = $pq->find('.dev-link');
+    foreach($privacy_policy as $key => $pp){
+        if ($key == 2){
+            $datas['privacy_policy'] = pq($pp)->attr('href');
+        }
+    }
+
+    $datas['whats_new'] = $pq->find('.recent-change')->text();
+
+    $datas['content_rating'] = $pq->find('[itemprop=contentRating]')->text();
+    return $datas;
+}
+
+function xml_encode ($array, $node = null) {
+    if (!isset($node)) $node = new SimpleXMLElement("<!--?xml version=\"1.0\"?-->");
+    foreach ($array as $key => $value) {
+        if (is_numeric($key))
+            $key = 'item' . $key;
+        if (is_array($value)) {
+            $subnode = $node->addChild($key);
+            $node = $this->xml_encode($array, $subnode);
+        } else {
+            $node->addChild($key, $value);
+        }
+    }
+    return $node->asXML();
+}
+
+function array_as_xml( $array, $root ) {
+    $xml = new SimpleXMLElement( '<' . $root . '/>' );
+    foreach( $array as $element=>$value ) {
+        $element = is_numeric( $element ) ? $root : $element;
+        if ( is_array( $value ) ) {
+            if ( is_numeric_keys( $value ) ) {
+                array2xml( $value, $xml, $element );
+            } else {
+                $$element = $xml->addChild( $element );
+                array2xml( $value, $$element, $element );
+            }
+        } else {
+            $xml->addChild( $element, $value );
+        }
+    }
+    return $xml->asXML();
+}
+
+function array2xml( $array, &$xml, $root ) {
+    foreach( $array as $element=>$value ) {
+        $element = is_numeric( $element ) ? $root : $element;
+        if ( is_array( $value ) ) {
+            if ( is_numeric_keys( $value ) ) {
+                array2xml( $value, $xml, $element );
+            } else {
+                $$element = $xml->addChild( $element );
+                array2xml( $value, $$element, $element );
+            }
+        } else {
+            if ( preg_match( '/^@/', $element) ) {
+                $xml->addAttribute( str_replace( '@', '', $element ), $value );
+            } else {
+                $xml->addChild( $element, htmlspecialchars($value) );
+            }
+        }
+    }
+}
+
+function is_numeric_keys( $array ) {
+    foreach( $array as $key=>$value ) {
+        if ( ! is_numeric( $key ) ) {
+            return false;
+        }
+    }
+    return true;
+}
